@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-
+#include <unordered_map>
+#include <list>
+#include <memory>
 
 const int max_age_of_rabbits = 3;
 const int max_age_of_wolfs = 9;
@@ -18,6 +20,7 @@ const bool is_searching = true;
 const double quality_of_search = 0.6;
 
 const int STEPS = 1000;
+const int GRID_CELL_SIZE = 10; // Размер ячейки пространственной сетки
 
 struct Position {
     int x = 0;
@@ -50,34 +53,36 @@ struct Position {
         int dy = y - other.y;
         return std::sqrt(dx * dx + dy * dy);
     }
+
+    int gridKey(int cellSize) const {
+        return (x / cellSize) * 1000 + (y / cellSize);
+    }
 };
 
-Position operator+(Position lhs, Position rhs) {
-    return lhs += rhs;
+namespace std {
+    template <>
+    struct hash<Position> {
+        size_t operator()(const Position& pos) const {
+            return hash<int>()(pos.x) ^ (hash<int>()(pos.y) << 1);
+        }
+    };
 }
-
-Position operator-(Position lhs, Position rhs) {
-    return lhs -= rhs;
-}
-
-using Cord = Position;
-using Point = Position;
 
 class Animal {
+protected:
+    Position position_;
+    int age;
+
 public:
     Animal(int startX, int startY) : position_(startX, startY), age(0) {}
-    Animal(Point startP) : position_(startP), age(0) {}
+    Animal(Position startP) : position_(startP), age(0) {}
     virtual ~Animal() = default;
 
-    virtual void Move(int width, int height) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
+    virtual void Move(std::mt19937& gen, int width, int height) {
         std::uniform_int_distribution<> dis(-1, 1);
+        position_.x += dis(gen);
+        position_.y += dis(gen);
 
-        Position move(dis(gen), dis(gen));
-        position_ += move;
-
-        // Обеспечиваем тороидальное движение (выход за границу = появление с другой стороны)
         position_.x = (position_.x + width) % width;
         position_.y = (position_.y + height) % height;
 
@@ -89,106 +94,112 @@ public:
     Position getPosition() const { return position_; }
     int getAge() const { return age; }
     void resetAge() { age = 0; }
-
-protected:
-    Point position_;
-    int age;
 };
 
 class Rabbit : public Animal {
 public:
     Rabbit(int x, int y) : Animal(x, y) {}
+    using Animal::Animal;
 };
 
 class Wolf : public Animal {
 public:
     Wolf(int x, int y) : Animal(x, y) {}
+    using Animal::Animal;
 
-    void MoveWithoutSearch(int width, int height) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(-1, 1);
+    void MoveWithSearch(std::mt19937& gen, int width, int height,
+        const std::unordered_map<int, std::vector<Position>>& rabbitGrid,
+        int cellSize) {
+        // Проверяем ближайшие клетки сетки для поиска зайцев
+        int currentGridKey = position_.gridKey(cellSize);
+        Position bestTarget;
+        double bestDistance = std::numeric_limits<double>::max();
+        bool found = false;
 
-        Position move(dis(gen), dis(gen));
-        position_ += move;
+        // Ищем в текущей и соседних ячейках сетки
+        int gridX = position_.x / cellSize;
+        int gridY = position_.y / cellSize;
 
-        // Обеспечиваем тороидальное движение (выход за границу = появление с другой стороны)
-        position_.x = (position_.x + width) % width;
-        position_.y = (position_.y + height) % height;
+        for (int dx = -1; dx <= 1; ++dx) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                int neighborKey = (gridX + dx) * 1000 + (gridY + dy);
+                auto it = rabbitGrid.find(neighborKey);
+                if (it != rabbitGrid.end()) {
+                    for (const auto& rabbitPos : it->second) {
+                        double dist = position_.distanceTo(rabbitPos);
+                        if (dist < bestDistance) {
+                            bestDistance = dist;
+                            bestTarget = rabbitPos;
+                            found = true;
+                        }
+                    }
+                }
+            }
+        }
 
-        age++;
-    }
-
-    void MoveWithSearch(int width, int height, const std::vector<Rabbit>& rabbits) {
-        // Если есть зайцы, пытаемся двигаться к ближайшему
-        if (!rabbits.empty()) {
-            // Находим ближайшего зайца
-            Position target = findClosestRabbit(rabbits);
-
-            // Вычисляем направление к цели
-            int dx = 0, dy = 0;
-            if (target.x > position_.x) dx = 1;
-            else if (target.x < position_.x) dx = -1;
-
-            if (target.y > position_.y) dy = 1;
-            else if (target.y < position_.y) dy = -1;
-
-            // С вероятностью двигаемся к цели, иначе случайно
-            std::random_device rd;
-            std::mt19937 gen(rd());
+        if (found) {
             std::uniform_real_distribution<> prob(0.0, 1.0);
 
             if (prob(gen) < quality_of_search) {
                 // Двигаемся к цели
+                int dx = 0, dy = 0;
+                if (bestTarget.x > position_.x) dx = 1;
+                else if (bestTarget.x < position_.x) dx = -1;
+
+                if (bestTarget.y > position_.y) dy = 1;
+                else if (bestTarget.y < position_.y) dy = -1;
+
                 position_.x += dx;
                 position_.y += dy;
             }
             else {
-                // Случайное движение
                 std::uniform_int_distribution<> dis(-1, 1);
                 position_.x += dis(gen);
                 position_.y += dis(gen);
             }
         }
         else {
-            // Нет зайцев - случайное движение
-            std::random_device rd;
-            std::mt19937 gen(rd());
             std::uniform_int_distribution<> dis(-1, 1);
-
             position_.x += dis(gen);
             position_.y += dis(gen);
         }
 
-        // Обеспечиваем тороидальное движение
         position_.x = (position_.x + width) % width;
         position_.y = (position_.y + height) % height;
-
         age++;
-    }
-
-private:
-    Position findClosestRabbit(const std::vector<Rabbit>& rabbits) const {
-        Position closest = rabbits[0].getPosition();
-        double minDistance = position_.distanceTo(closest);
-
-        for (const auto& rabbit : rabbits) {
-            double distance = position_.distanceTo(rabbit.getPosition());
-            if (distance < minDistance) {
-                minDistance = distance;
-                closest = rabbit.getPosition();
-            }
-        }
-
-        return closest;
     }
 };
 
 class Iland {
+private:
+    int n, m;
+    std::vector<Rabbit> rabbits_;
+    std::vector<Wolf> wolves_;
+    bool search_;
+
+    // Пространственная сетка для быстрого поиска зайцев
+    std::unordered_map<int, std::vector<Position>> rabbitGrid_;
+    int cellSize_;
+
+    // Генератор случайных чисел (один на весь остров)
+    std::mt19937 gen_;
+
+    void updateRabbitGrid() {
+        rabbitGrid_.clear();
+        for (const auto& rabbit : rabbits_) {
+            Position pos = rabbit.getPosition();
+            rabbitGrid_[pos.gridKey(cellSize_)].push_back(pos);
+        }
+    }
+
 public:
-    Iland(int width, int height, bool search) : n(width), m(height), search_(search) {}
+    Iland(int width, int height, bool search)
+        : n(width), m(height), search_(search), cellSize_(GRID_CELL_SIZE), gen_(std::random_device{}()) {
+    }
 
     void addRabbit(int x, int y) {
+        x = (x + n) % n;
+        y = (y + m) % m;
         rabbits_.emplace_back(x, y);
     }
 
@@ -196,70 +207,93 @@ public:
         wolves_.emplace_back(x, y);
     }
 
-    void SetSearchMod(bool search) { search_ = search; }
-
     void simulateStep() {
         // Движение зайцев
         for (auto& rabbit : rabbits_) {
-            rabbit.Move(n, m);
+            rabbit.Move(gen_, n, m);
         }
+        updateRabbitGrid(); // Обновляем сетку после движения зайцев
 
+        // Движение волков
         if (search_) {
-            // Движение волков с поиском зайцев
             for (auto& wolf : wolves_) {
-                wolf.MoveWithSearch(n, m, rabbits_);
+                wolf.MoveWithSearch(gen_, n, m, rabbitGrid_, cellSize_);
             }
         }
         else {
-            // Движение волков без поиска
             for (auto& wolf : wolves_) {
-                wolf.MoveWithoutSearch(n, m);
+                wolf.Move(gen_, n, m);
             }
         }
-
 
         // Размножение зайцев
-        std::vector<Rabbit> newRabbits;
-        for (auto& rabbit : rabbits_) {
-            if (rabbit.getAge() >= max_age_of_rabbits) {
-                rabbit.resetAge();
-                if (rabbits_.size() + newRabbits.size() <max_rabbits_count) {
-                    newRabbits.emplace_back(rabbit.getX(), rabbit.getY());
+        size_t currentRabbits = rabbits_.size();
+        if (currentRabbits < max_rabbits_count) {
+            std::vector<Rabbit> newRabbits;
+            newRabbits.reserve(currentRabbits / 2); // Резервируем память
+
+            for (auto& rabbit : rabbits_) {
+                if (rabbit.getAge() >= max_age_of_rabbits) {
+                    rabbit.resetAge();
+                    if (rabbits_.size() + newRabbits.size() < max_rabbits_count) {
+                        Position pos = rabbit.getPosition();
+                        newRabbits.emplace_back(pos.x, pos.y);
+                    }
                 }
             }
+
+            if (!newRabbits.empty()) {
+                rabbits_.insert(rabbits_.end(), newRabbits.begin(), newRabbits.end());
+                updateRabbitGrid();
+            }
         }
-        rabbits_.insert(rabbits_.end(), newRabbits.begin(), newRabbits.end());
 
         // Взаимодействие волков и зайцев
         std::vector<Wolf> newWolves;
+        newWolves.reserve(wolves_.size() / 2);
+
         std::vector<Wolf> survivingWolves;
+        survivingWolves.reserve(wolves_.size());
 
-        for (auto& wolf : wolves_) {
-            bool ateRabbit = false;
-            auto it = rabbits_.begin();
-            while (it != rabbits_.end()) {
-                if (wolf.getPosition() == it->getPosition()) {
-                    ateRabbit = true;
-                    wolf.resetAge();
-                    if(wolves_.size() + newWolves.size() < max_wolf_count){
-                        newWolves.emplace_back(wolf.getX(), wolf.getY());
-                    }
-                    it = rabbits_.erase(it);
-                    break;
-                }
-                else {
-                    ++it;
-                }
-            }
-
-            if (ateRabbit || wolf.getAge() < max_age_of_wolfs) {
-                survivingWolves.push_back(wolf);
-            }
-            // Волки с возрастом >= 9 и не съевшие зайца - погибают (не добавляются в survivingWolves)
+        // Создаем быстрый поиск зайцев по позициям
+        std::unordered_map<Position, size_t, std::hash<Position>> rabbitPositions;
+        for (size_t i = 0; i < rabbits_.size(); ++i) {
+            rabbitPositions[rabbits_[i].getPosition()] = i;
         }
 
-        wolves_ = survivingWolves;
-        wolves_.insert(wolves_.end(), newWolves.begin(), newWolves.end());
+        for (auto& wolf : wolves_) {
+            Position wolfPos = wolf.getPosition();
+            auto it = rabbitPositions.find(wolfPos);
+
+            if (it != rabbitPositions.end()) {
+                // Волк съел зайца
+                wolf.resetAge();
+                if (wolves_.size() + newWolves.size() < max_wolf_count) {
+                    newWolves.emplace_back(wolf.getX(), wolf.getY());
+                }
+
+                // Удаляем зайца
+                size_t rabbitIndex = it->second;
+                if (rabbitIndex != rabbits_.size() - 1) {
+                    std::swap(rabbits_[rabbitIndex], rabbits_.back());
+                    rabbitPositions[rabbits_[rabbitIndex].getPosition()] = rabbitIndex;
+                }
+                rabbits_.pop_back();
+                rabbitPositions.erase(it);
+
+                // Обновляем сетку
+                updateRabbitGrid();
+            }
+
+            if (wolf.getAge() < max_age_of_wolfs) {
+                survivingWolves.push_back(std::move(wolf));
+            }
+        }
+
+        wolves_ = std::move(survivingWolves);
+        if (!newWolves.empty()) {
+            wolves_.insert(wolves_.end(), newWolves.begin(), newWolves.end());
+        }
     }
 
     void printStats() const {
@@ -267,9 +301,7 @@ public:
     }
 
     bool isFinished() const {
-        if (rabbits_.empty() && wolves_.empty()) {
-            return true;
-        }
+        if (rabbits_.empty() && wolves_.empty()) return true;
         if (rabbits_.empty()) {
             std::cout << "Остались только Волки: " << wolves_.size() << std::endl;
             return true;
@@ -284,52 +316,36 @@ public:
     double calculateCorrelation() const {
         if (rabbits_.empty() || wolves_.empty()) return 0.0;
 
-        // Рассчитываем средние количества животных на клетку
+        // Используем уже рассчитанную сетку для зайцев
+        std::unordered_map<int, int> wolfGrid;
+        for (const auto& wolf : wolves_) {
+            wolfGrid[wolf.getPosition().gridKey(cellSize_)]++;
+        }
+
         double rabbitMean = static_cast<double>(rabbits_.size()) / (n * m);
         double wolfMean = static_cast<double>(wolves_.size()) / (n * m);
 
-        // Создаем сетки для подсчета животных в каждой клетке
-        std::vector<std::vector<int>> rabbitGrid(n, std::vector<int>(m, 0));
-        std::vector<std::vector<int>> wolfGrid(n, std::vector<int>(m, 0));
-
-        // Заполняем сетки
-        for (const auto& rabbit : rabbits_) {
-            int x = rabbit.getX() % n;
-            int y = rabbit.getY() % m;
-            if (x >= 0 && x < n && y >= 0 && y < m) {
-                rabbitGrid[x][y]++;
-            }
-        }
-
-        for (const auto& wolf : wolves_) {
-            int x = wolf.getX() % n;
-            int y = wolf.getY() % m;
-            if (x >= 0 && x < n && y >= 0 && y < m) {
-                wolfGrid[x][y]++;
-            }
-        }
-
-        // Рассчитываем ковариацию
         double covariance = 0.0;
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < m; ++j) {
-                covariance += (rabbitGrid[i][j] - rabbitMean) * (wolfGrid[i][j] - wolfMean);
-            }
-        }
-        covariance /= (n * m);
-
-        // Рассчитываем стандартные отклонения
         double rabbitVariance = 0.0;
         double wolfVariance = 0.0;
 
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < m; ++j) {
-                rabbitVariance += std::pow(rabbitGrid[i][j] - rabbitMean, 2);
-                wolfVariance += std::pow(wolfGrid[i][j] - wolfMean, 2);
-            }
+        // Проходим по всем ячейкам сетки
+        for (const auto& rabbitCell : rabbitGrid_) {
+            int wolfCount = wolfGrid[rabbitCell.first];
+            double rabbitCellCount = rabbitCell.second.size() / static_cast<double>(cellSize_ * cellSize_);
+            double wolfCellCount = wolfCount / static_cast<double>(cellSize_ * cellSize_);
+
+            covariance += (rabbitCellCount - rabbitMean) * (wolfCellCount - wolfMean);
+            rabbitVariance += std::pow(rabbitCellCount - rabbitMean, 2);
+            wolfVariance += std::pow(wolfCellCount - wolfMean, 2);
         }
-        rabbitVariance /= (n * m);
-        wolfVariance /= (n * m);
+
+        int totalCells = (n / cellSize_) * (m / cellSize_);
+        if (totalCells > 0) {
+            covariance /= totalCells;
+            rabbitVariance /= totalCells;
+            wolfVariance /= totalCells;
+        }
 
         double rabbitStd = std::sqrt(std::max(0.0, rabbitVariance));
         double wolfStd = std::sqrt(std::max(0.0, wolfVariance));
@@ -338,12 +354,6 @@ public:
 
         return covariance / (rabbitStd * wolfStd);
     }
-
-private:
-    int n, m;
-    std::vector<Rabbit> rabbits_;
-    std::vector<Wolf> wolves_;
-    bool search_ = false;
 };
 
 int main() {
@@ -352,13 +362,8 @@ int main() {
     const int N = size_of_iland;
     const int M = size_of_iland;
 
-
-    //Поиск?
     Iland island(N, M, is_searching);
 
-
-
-    // Начальная популяция
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, N - 1);
@@ -370,9 +375,6 @@ int main() {
         island.addWolf(dis(gen), dis(gen));
     }
 
-    
-
-    // Симуляция
     for (int step = 0; step < STEPS; ++step) {
         std::cout << "Шаг " << step + 1 << ": ";
         island.simulateStep();
@@ -384,8 +386,6 @@ int main() {
         if (island.isFinished()) {
             break;
         }
-
-        std::cout << std::endl;
     }
 
     return 0;
