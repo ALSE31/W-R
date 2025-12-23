@@ -107,16 +107,12 @@ public:
     Wolf(int x, int y) : Animal(x, y) {}
     using Animal::Animal;
 
-    void MoveWithSearch(std::mt19937& gen, int width, int height,
-        const std::unordered_map<int, std::vector<Position>>& rabbitGrid,
-        int cellSize) {
-        // Проверяем ближайшие клетки сетки для поиска зайцев
+    void MoveWithSearch(std::mt19937& gen, int width, int height, const std::unordered_map<int, std::vector<Position>>& rabbitGrid, int cellSize) {
         int currentGridKey = position_.gridKey(cellSize);
         Position bestTarget;
         double bestDistance = std::numeric_limits<double>::max();
         bool found = false;
 
-        // Ищем в текущей и соседних ячейках сетки
         int gridX = position_.x / cellSize;
         int gridY = position_.y / cellSize;
 
@@ -177,11 +173,9 @@ private:
     std::vector<Wolf> wolves_;
     bool search_;
 
-    // Пространственная сетка для быстрого поиска зайцев
     std::unordered_map<int, std::vector<Position>> rabbitGrid_;
     int cellSize_;
 
-    // Генератор случайных чисел (один на весь остров)
     std::mt19937 gen_;
 
     void updateRabbitGrid() {
@@ -208,13 +202,11 @@ public:
     }
 
     void simulateStep() {
-        // Движение зайцев
         for (auto& rabbit : rabbits_) {
             rabbit.Move(gen_, n, m);
         }
-        updateRabbitGrid(); // Обновляем сетку после движения зайцев
+        updateRabbitGrid();
 
-        // Движение волков
         if (search_) {
             for (auto& wolf : wolves_) {
                 wolf.MoveWithSearch(gen_, n, m, rabbitGrid_, cellSize_);
@@ -226,11 +218,10 @@ public:
             }
         }
 
-        // Размножение зайцев
         size_t currentRabbits = rabbits_.size();
         if (currentRabbits < max_rabbits_count) {
             std::vector<Rabbit> newRabbits;
-            newRabbits.reserve(currentRabbits / 2); // Резервируем память
+            newRabbits.reserve(currentRabbits / 2);
 
             for (auto& rabbit : rabbits_) {
                 if (rabbit.getAge() >= max_age_of_rabbits) {
@@ -248,14 +239,12 @@ public:
             }
         }
 
-        // Взаимодействие волков и зайцев
         std::vector<Wolf> newWolves;
         newWolves.reserve(wolves_.size() / 2);
 
         std::vector<Wolf> survivingWolves;
         survivingWolves.reserve(wolves_.size());
 
-        // Создаем быстрый поиск зайцев по позициям
         std::unordered_map<Position, size_t, std::hash<Position>> rabbitPositions;
         for (size_t i = 0; i < rabbits_.size(); ++i) {
             rabbitPositions[rabbits_[i].getPosition()] = i;
@@ -272,7 +261,6 @@ public:
                     newWolves.emplace_back(wolf.getX(), wolf.getY());
                 }
 
-                // Удаляем зайца
                 size_t rabbitIndex = it->second;
                 if (rabbitIndex != rabbits_.size() - 1) {
                     std::swap(rabbits_[rabbitIndex], rabbits_.back());
@@ -281,7 +269,6 @@ public:
                 rabbits_.pop_back();
                 rabbitPositions.erase(it);
 
-                // Обновляем сетку
                 updateRabbitGrid();
             }
 
