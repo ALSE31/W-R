@@ -20,7 +20,7 @@ const bool is_searching = true;
 const double quality_of_search = 0.6;
 
 const int STEPS = 1000;
-const int GRID_CELL_SIZE = 10; // Размер ячейки пространственной сетки
+const int GRID_CELL_SIZE = 10;
 
 struct Position {
     int x = 0;
